@@ -1,0 +1,249 @@
+---
+title: "Barents Hg river flux"
+output: html_document
+date: "2022-10-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Calculate River Hg Flux
+- Rivers in Norway Målselva, Alta, Tana, and Pasvik
+- Rivers in Russia: Northern Dvina and possibly Tuloma
+
+We have monthly Hg samples with monthly water flow. 
+
+# Calculation methods
+According to Achmed et al., (2018) doi: 10.1007/s10661-017-6444-y.there are different ways of calculating river flux depending on the sampling frequencey and variable of interest. 
+
+Downside of our data (at least the Russian) has the downside of water flow not available at the time of sampling for Hg determination. Because of this I choose the Global Mean (GM) method. The method is considered more imprecise and inaccurate.  
+```{r Load pacages}
+Packages <- c("tidyr","plyr", "dplyr", "ggplot2")
+lapply(Packages, library, character.only = TRUE)
+```
+The following files are needed:
+- Monthly flow from Norwegian Rivers
+- Monthly Hg measure in Norwegian Rivers
+- Montly flow with Hg measured in Russian Rivers
+```{r Load Data}
+#Norwegian data
+RM19 <- read.table("221021_MonthlyFlow_Rivermonitoring_2019.txt", sep = "\t", header = TRUE)
+RM20 <- read.table("221021_MonthlyFlow_Rivermonitoring_2020.txt", sep = "\t", header = TRUE)
+RM21 <- read.table("221021_MonthlyFlow_Rivermonitoring_2021.txt", sep = "\t", header = TRUE)
+RMHg <- read.table("221021_RM_THg data212019.txt", sep = "\t", header = TRUE)
+#Need to rename station Målselv
+RMHg$Station.name <- revalue(RMHg$Station.name, c("M?selva" = "Malselv"))
+
+#Russian data
+Rus <- read.table("221021_Russia.txt", sep = "\t", header = TRUE)
+```
+
+```{r Data Pre-processing}
+No_flow <- rbind(RM19, RM20, RM21)
+
+#Calculate from flow per second to per month
+No_flow$DisMean_m3 <- No_flow$DisMean_m3s * 2628288*1000
+No_flow$Variable <- "Flow_m3"
+colnames(No_flow)[which(names(No_flow) == "DisMean_m3")] <- "Value"
+
+RMHg$Year=gsub(" mean.*","",RMHg$Year)
+colnames(RMHg)[which(names(RMHg) == "THg")] <- "Value"
+RMHg$Variable <- "THg"
+
+#Rus from wide to long
+Rus$DisMean_m3 <- Rus$DisMean_m3s * 2628288*1000
+colnames(Rus)[which(names(Rus) == "DisMean_m3")] <- "Flow_m3"
+Rus_long <- gather(Rus, Variable, Value, c(THg,Flow_m3), factor_key=TRUE)
+
+AllNor <- rbind(No_flow[,c(3:5, 7:8)], RMHg[,c(1, 3, 5:7)])
+AllNor2 <- subset(AllNor, Year == "2019"|Year =="2020")
+AllRiv <- rbind(Rus_long[,c(1, 4:5, 7:8)], AllNor2)
+#Subset rivers
+```
+
+Find annual water discharge to see correlation to Hg
+```{r Annual water discharge}
+#summarise Value for variable == Flow_m3, by Year and Station.name
+
+bajabaj <- AllRiv %>% 
+    filter(Station.name == "Altaelva"| Station.name == "Pasvikelva" | Station.name == "Tanaelva" | Station.name == "Malselv"|Station.name == "Northern Dvina"|Station.name == "Tuloma") %>%
+  group_by(Station.name, Year, Variable) %>% 
+  summarise(sumr = sum(Value))
+
+#filter(Variable == "Flow") %>%
+```
+
+
+The global mean (GB) method (Huang et al. 2012) calculated annual river load as a product of the total annual flow and average contamninant concentrations for the period of the record, as expressed by the following equation (Shih et al. 1994):
+
+L = mQt(∑(Ci/n)),
+
+L = annual river load (M/T)
+m = conversion factor to convert the calculated values into a specific unit
+Ci = contaminant concentration (M/L3) measured at the ith day
+Qt = total annual flow (L3/T)
+n = number of samples
+
+Considering to use this method on a monthly basis and then to summarise. 
+monthly flow * contaminant concentration
+
+OBS!! make sure the units are correct
+
+- FLOW: for each month, multiply by 2,628,288 seconds per month and summarise per site per year to get Q of m3/y
+```{r Calculations}
+
+#Norwegian rivers
+summary(AllRiv)
+AllRiv$Value <- as.numeric(AllRiv$Value)
+typeof(AllRiv$Value)
+
+#Calculate annual sum of water flow
+df1 <- AllRiv %>%
+  group_by(Station.name, Year) %>%
+  summarize(sumFlow = sum(Value[Variable=="Flow_m3"]))
+
+df2 <- AllRiv %>%
+  group_by(Station.name, Year) %>%
+  summarize(sumHg = mean(Value[Variable=="THg"], na.rm = T))
+
+total <- merge(df1, df2,by=c("Station.name", "Year"))
+
+class(total$Station.name)
+
+total2 <- total %>%
+  filter(Station.name == "Altaelva"| Station.name == "Pasvikelva" | Station.name == "Tanaelva" | Station.name == "Malselv") %>%
+  group_by(Station.name, Year) %>%
+  mutate(FLOW = (sumFlow*sumHg)*10^-15)
+
+#Russian RIvers
+summary(Rus_long)
+
+#Calculate annual sum of water flow
+df1x <- Rus_long %>%
+  group_by(Station.name, Year) %>%
+  summarize(sumFlow = sum(Value[Variable=="Flow_m3"]))
+
+df2x <- Rus_long %>%
+  group_by(Station.name, Year) %>%
+  summarize(sumHg = mean(Value[Variable=="THg"], na.rm = T))
+
+totalx <- merge(df1x, df2x, by=c("Station.name", "Year"))
+
+total2x <- totalx %>%
+  group_by(Station.name, Year) %>%
+  mutate(FLOW = (sumFlow*sumHg)*10^-15)
+
+
+
+```
+## To make a nice plot
+- plot boxplot with NO and RU rivers THg per month with flow as line
+```{r Organise the data}
+#Norwegian flow data
+#No_flow 
+#RMHg
+#fjern kolonne 7
+NOR_flow2 = select(No_flow, -7)
+colnames(NOR_flow2)[which(names(NOR_flow2) == "DisMean_m3s")] <- "Value"
+
+AllNOR2 <- rbind(NOR_flow2[,c(3:7)], RMHg[,c(1, 3, 5:7)])
+
+#Rus
+Rus_long2 <- gather(Rus, Variable, Value, c(THg,DisMean_m3s), factor_key=TRUE)
+
+AllNOR2$Variable2 <- "Norway"
+Rus_long2$Variable2 <- "Russia"
+
+AllBAR <- rbind(AllNOR2, Rus_long2[,c(1, 4:5, 7:9)])
+AllBAR$Variable <- gsub("Flow_m3", "DisMean_m3s", AllBAR$Variable)
+```
+
+
+```{r make the plot}
+AllBAR2 <- filter(AllBAR, Station.name == "Altaelva"| Station.name == "Pasvikelva" | Station.name == "Tanaelva" | Station.name == "Malselv"| Station.name == "Northern Dvina" | Station.name == "Tuloma") 
+
+AllBAR2$Value <- as.numeric(AllBAR2$Value)
+ggplot(AllBAR2, aes(x=as.numeric(Month), y=Value, group=as.numeric(Month), colour=Station.name))+
+  geom_boxplot()+
+  geom_jitter(width=0.15)+
+  facet_grid(Variable~Variable2, scales = "free")
+ 
+       
+summary(AllBAR2)
+
+
+ggplot(df, aes(x=group, y=values, fill=group)) +
+  geom_boxplot() +
+  stat_summary(fun=mean, geom='point', shape=20)
+
+```
+
+```{r Make plot dual y-axis}
+
+library(ggplot2)
+library(dplyr)
+library(patchwork) # To display 2 charts together
+library(hrbrthemes)
+
+#Preparation
+AllBAR3 <- spread(AllBAR2, Variable, as.numeric(Value))
+AllBAR3$type <- as.factor(ifelse(AllBAR3$Station.name == "Northern Dvina", "4",
+                          ifelse(AllBAR3$Station.name == "Malselv", "1", 
+                          ifelse(AllBAR3$Station.name == "Altaelva", "1", 
+                          ifelse(AllBAR3$Station.name == "Tanaelva", "2",
+                          ifelse(AllBAR3$Station.name == "Pasvikelva", "2",
+                          ifelse(AllBAR3$Station.name == "Tuloma", "2", "")))))))
+#Average flow data per year and type?
+
+
+# Value used to transform the data
+coeff <- 300
+
+# A few constants
+temperatureColor <- "#69b3a2"
+priceColor <- rgb(0.2, 0.6, 0.9, 1)
+
+ggplot(AllBAR3, aes(x=Month, colour=Station.name)) +
+  geom_line( aes(y=DisMean_m3s/300), size=0.8) +
+  geom_boxplot( aes(y=THg, group=Month))+
+  geom_jitter( aes(y=THg), width=0.15)+
+  facet_wrap(type~., scales="free")
+
+#make average of flow
+AllBARy <- na.omit(AllBAR3) %>% 
+  filter(!Year == "2021") %>% 
+  group_by(Month, Station.name)%>%
+  summarise(mean_Dis=mean(DisMean_m3s))
+
+AllBARx <- na.omit(AllBAR3) %>% 
+  filter(!Year == "2021") %>% 
+  group_by(Month, Station.name)%>%
+  summarise(mean_THg=mean(THg))
+
+AllBAR6 <- merge(AllBARy, AllBARx, by=c("Station.name","Month"))
+
+AllBAR6$type <- as.factor(ifelse(AllBAR6$Station.name == "Northern Dvina", "4",
+                          ifelse(AllBAR6$Station.name == "Malselv", "1", 
+                          ifelse(AllBAR6$Station.name == "Altaelva", "1", 
+                          ifelse(AllBAR6$Station.name == "Tanaelva", "2",
+                          ifelse(AllBAR6$Station.name == "Pasvikelva", "2",
+                          ifelse(AllBAR6$Station.name == "Tuloma", "2", "")))))))
+
+
+#Try to make plot less messy without the box
+ggplot(AllBAR6, aes( x=Month, group=Station.name)) +
+  geom_line(aes(y=mean_Dis/300, colour=Station.name))+
+  geom_point(aes(y=mean_THg, colour=Station.name))+
+  facet_wrap(type~., scales="free")
+  
+  geom_boxplot(aes(y=mean_THg, group=Month, colour=Station.name))+
+
+  'geom_point(aes(y=THg))+  
+ 
+  
+
+  
+  geom_jitter( aes(y=THg), width=0.15)
+
+```
+
